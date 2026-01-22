@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Drop: Pro Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        :root { --neon: #00f2ff; --bg: #030308; }
+        body { margin: 0; background: var(--bg); color: white; font-family: 'Inter', sans-serif; overflow: hidden; touch-action: none; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        
+        #stage { position: relative; border: 4px solid rgba(255,255,255,0.05); border-radius: 20px; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+        canvas { display: block; border-radius: 16px; background: radial-gradient(circle at top, #0a0a1a 0%, #030308 100%); }
+
+        /* HUD */
+        .hud { position: absolute; top: 20px; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; pointer-events: none; z-index: 10; }
+        .stat-card { background: rgba(255,255,255,0.03); backdrop-filter: blur(10px); padding: 8px 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); }
+        .label { font-size: 10px; text-transform: uppercase; color: var(--neon); letter-spacing: 1px; }
+        .val { font-size: 20px; font-weight: 800; }
+
+        /* Tutorial Overlay */
+        #tutorial-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            border-radius: 16px;
+            transition: opacity 0.5s ease;
+        }
+        .instruction-step { margin: 15px; display: flex; align-items: center; gap: 15px; font-size: 18px; }
+        .icon { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--neon); display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        .blink { animation: blinker 1.5s linear infinite; color: var(--neon); font-weight: bold; margin-top: 20px; }
+        @keyframes blinker { 50% { opacity: 0; } }
+
+        #game-over { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 100; border-radius: 16px; }
+        #game-over.active { display: flex; }
+        
+        button { background: var(--neon); color: black; border: none; padding: 12px 30px; border-radius: 30px; font-weight: 800; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
+        button:hover { transform: scale(1.1); box-shadow: 0 0 20px var(--neon); }
+    </style>
+</head>
+<body>
+
+    <div id="stage">
+        <canvas id="game"></canvas>
+        
+        <div id="tutorial-overlay" onclick="startFirstGame()">
+            <h2 style="color: var(--neon); font-size: 32px; margin-bottom: 30px;">HOW TO PLAY</h2>
+            <div class="instruction-step">
+                <div class="icon">1</div>
+                <span>Aim with your finger or mouse</span>
+            </div>
+            <div class="instruction-step">
+                <div class="icon">2</div>
+                <span>Tap to drop the neon orb</span>
+            </div>
+            <div class="instruction-step">
+                <div class="icon">3</div>
+                <span>Merge SAME colors to grow!</span>
+            </div>
+            <div class="blink">TAP ANYWHERE TO START</div>
+        </div>
+
+        <div class="hud">
+            <div class="stat-card">
+                <div class="label">Score</div>
+                <div id="score" class="val">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Best</div>
+                <div id="best" class="val">0</div>
+            </div>
+        </div>
+
+        <div id="game-over">
+            <h2 style="font-size: 40px; margin: 0;">TOPPED OUT</h2>
+            <p id="final-score-text" style="color: var(--neon); font-weight: bold; margin: 20px 0;"></p>
+            <button onclick="location.reload()">PLAY AGAIN</button>
+        </div>
+    </div>
+
+<script>
+// (Matter.js logic remains optimized as before)
+const WIDTH = 400; const HEIGHT = 650; const DEADLINE = 120;
+const BALL_DATA = [
+    { r: 15, color: '#ff2d55', score: 2 }, { r: 24, color: '#ff9500', score: 4 },
+    { r: 32, color: '#ffcc00', score: 8 }, { r: 40, color: '#4cd964', score: 16 },
+    { r: 52, color: '#5ac8fa', score: 32 }, { r: 66, color: '#007aff', score: 64 },
+    { r: 80, color: '#5856d6', score: 128 }, { r: 96, color: '#ff3b30', score: 256 },
+    { r: 115, color: '#ffffff', score: 512 }
+];
+
+const { Engine, World, Bodies, Events, Composite } = Matter;
+const engine = Engine.create({ enableSleeping: true });
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let score = 0;
+let isStarted = false;
+let gameOver = false;
+let currentIdx = 0;
+let nextIdx = Math.floor(Math.random() * 3);
+let isWait = false;
+let mouseX = WIDTH / 2;
+
+// High Score
+let best = localStorage.getItem('neon-best') || 0;
+document.getElementById('best').innerText = best;
+
+// Floor and Walls
+World.add(engine.world, [
+    Bodies.rectangle(WIDTH/2, HEIGHT + 25, WIDTH, 50, { isStatic: true }),
+    Bodies.rectangle(-25, HEIGHT/2, 50, HEIGHT, { isStatic: true }),
+    Bodies.rectangle(WIDTH + 25, HEIGHT/2, 50, HEIGHT, { isStatic: true })
+]);
+
+function startFirstGame() {
+    document.getElementById('tutorial-overlay').style.opacity = '0';
+    setTimeout(() => {
+        document.getElementById('tutorial-overlay').style.display = 'none';
+        isStarted = true;
+    }, 500);
+}
+
+function drawBall(x, y, radius, color, isGhost = false) {
+    ctx.save();
+    if(isGhost) ctx.globalAlpha = 0.3;
+    const grad = ctx.createRadialGradient(x - radius/3, y - radius/3, radius/10, x, y, radius);
+    grad.addColorStop(0, '#fff'); grad.addColorStop(0.2, color); grad.addColorStop(1, '#000');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+
+function update() {
+    if (gameOver) return;
+    if (isStarted) Engine.update(engine, 1000/60);
+    
+    ctx.clearRect(0,0, WIDTH, HEIGHT);
+    
+    // Draw Deadline
+    ctx.strokeStyle = 'rgba(255, 45, 85, 0.2)';
+    ctx.beginPath(); ctx.moveTo(0, DEADLINE); ctx.lineTo(WIDTH, DEADLINE); ctx.stroke();
+
+    const bodies = Composite.allBodies(engine.world);
+    bodies.forEach(b => {
+        if (!b.isStatic) {
+            drawBall(b.position.x, b.position.y, b.circleRadius, BALL_DATA[b.gameIdx].color);
+            if (b.position.y < DEADLINE && Math.abs(b.velocity.y) < 0.1 && !b.isNew) endGame();
+        }
+    });
+
+    if (isStarted && !isWait) {
+        drawBall(mouseX, 50, BALL_DATA[currentIdx].r, BALL_DATA[currentIdx].color, true);
+    }
+
+    requestAnimationFrame(update);
+}
+
+// Input Handling
+const handleMove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    const scale = WIDTH / rect.width;
+    mouseX = Math.max(BALL_DATA[currentIdx].r, Math.min(WIDTH - BALL_DATA[currentIdx].r, (x - rect.left) * scale));
+};
+
+const handleDrop = () => {
+    if (!isStarted || isWait || gameOver) return;
+    const ball = Bodies.circle(mouseX, 50, BALL_DATA[currentIdx].r, { restitution: 0.3 });
+    ball.gameIdx = currentIdx; ball.isNew = true;
+    World.add(engine.world, ball);
+    isWait = true;
+    setTimeout(() => { 
+        ball.isNew = false; currentIdx = nextIdx; nextIdx = Math.floor(Math.random()*3); isWait = false; 
+    }, 600);
+};
+
+canvas.addEventListener('mousemove', handleMove);
+canvas.addEventListener('mousedown', handleDrop);
+canvas.addEventListener('touchstart', (e) => { handleMove(e); handleDrop(); });
+
+Events.on(engine, 'collisionStart', (event) => {
+    event.pairs.forEach(pair => {
+        const { bodyA, bodyB } = pair;
+        if (bodyA.gameIdx !== undefined && bodyA.gameIdx === bodyB.gameIdx) {
+            if (bodyA.isMerging || bodyB.isMerging) return;
+            const nextLevel = bodyA.gameIdx + 1;
+            if (nextLevel >= BALL_DATA.length) return;
+            bodyA.isMerging = bodyB.isMerging = true;
+            score += BALL_DATA[bodyA.gameIdx].score;
+            document.getElementById('score').innerText = score;
+            const newBall = Bodies.circle((bodyA.position.x+bodyB.position.x)/2, (bodyA.position.y+bodyB.position.y)/2, BALL_DATA[nextLevel].r);
+            newBall.gameIdx = nextLevel;
+            World.remove(engine.world, [bodyA, bodyB]);
+            World.add(engine.world, newBall);
+        }
+    });
+});
+
+function endGame() {
+    gameOver = true;
+    if (score > best) localStorage.setItem('neon-best', score);
+    document.getElementById('final-score-text').innerText = "FINAL SCORE: " + score;
+    document.getElementById('game-over').classList.add('active');
+}
+
+window.onload = () => {
+    const scale = Math.min(window.innerWidth * 0.95 / WIDTH, window.innerHeight * 0.9 / HEIGHT);
+    canvas.width = WIDTH * scale; canvas.height = HEIGHT * scale;
+    ctx.scale(scale, scale);
+    update();
+};
+</script>
+</body>
+</html>
